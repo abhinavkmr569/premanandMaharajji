@@ -23,3 +23,6 @@ Thumbs.db
 .env.local
 cookies.txt
 user_context.txt
+
+# Local agent instructions
+CLAUDE.md
