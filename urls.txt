@@ -1,0 +1,42 @@
+# One YouTube URL per line. Single videos or playlists both work.
+# Lines starting with # are ignored. Blank lines are ignored.
+#
+# Examples:
+# https://www.youtube.com/watch?v=VIDEO_ID
+# https://www.youtube.com/playlist?list=PLAYLIST_ID
+
+# Dec 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlnBhc9NjDmv5vgNK9EeZF9J
+
+# Nov 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlnX3bEmvD_LbaUzbEVDc3dt
+
+# Oct 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlk2yJZTKV_3R7fqNwNWeioC
+
+# Sept 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlnBiCYTaCS6uKbXw7eNxyfC
+
+# August 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlmSAcauYLkLLhdLHFG1y-Ih
+
+# July 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlkR9ULNwauiNPExieQd1Cqo
+
+# June 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlnaEmq7dNkx8hm1XMJ6oHdG
+
+# May 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRll-PQdWb3fsjvk-6y5xzLZG
+
+# April 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRll_F8IrbElKjhJUWiUm0h4J
+
+# March 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRllODjEq1yOzblwld0Fpih7k
+
+# Feb 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRlnZ6S93yDT4XlyWJg7-Mddw
+
+# Jan 2025
+https://www.youtube.com/playlist?list=PLNlLlnQWoRllKcLMTPi98qVMaT60zKSvH

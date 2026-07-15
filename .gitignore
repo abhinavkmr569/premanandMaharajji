@@ -1,0 +1,25 @@
+# Generated data
+audio/
+transcripts/
+chroma_db/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets (never commit API keys or browser cookies)
+.env
+.env.local
+cookies.txt
+user_context.txt
