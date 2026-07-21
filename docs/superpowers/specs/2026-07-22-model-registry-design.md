@@ -18,11 +18,15 @@ tuning.
 
 A separate defect surfaced while designing this: `num_ctx` is never set, so Ollama applies
 its 4096-token default and truncates the prompt **from the beginning, silently**. The
-grounded-path prompt is roughly 5000–6000 tokens (system prompt and user context ~500–800;
-five chunks at up to 300 words ~2000; four history turns ~2000–3000; closing instruction
-block ~250). The content dropped first is the system prompt — the persona definition and
-the "speak only from the passages" constraint. This affects the current qwen3 setup today,
-independent of any model swap.
+grounded-path prompt is roughly 5000–6000 tokens. The content dropped first is the system
+prompt — the persona definition and the "speak only from the passages" constraint. This
+affects the current qwen3 setup today, independent of any model swap.
+
+Raising `num_ctx` alone does not fix it. It raises the ceiling; the same truncation happens
+above the new ceiling. History is trimmed by turn count (`MAX_HISTORY = 4`), not by size,
+and each assistant turn may be up to `num_predict = 2048` tokens — four maximal turns is
+8192 tokens of history on its own. A guarantee requires budgeted prompt assembly, covered in
+section 2.
 
 ## Goals
 
@@ -30,7 +34,8 @@ independent of any model swap.
 2. Preserve the current qwen3 configuration byte-for-byte as one registry entry.
 3. Carry per-model generation parameters, context length, and thinking mechanism.
 4. Make `logs/queries.jsonl` and `logs/feedback.jsonl` splittable by model.
-5. Set `num_ctx` explicitly for both models.
+5. Guarantee the system prompt and retrieved passages are never truncated, at any
+   conversation length.
 
 ## Non-goals
 
@@ -90,11 +95,63 @@ Nothing is re-tuned.
 defaults. `_has_repetition_loop()` still guards the failure case at the stream level. If
 Gemma loops in practice, they get added back with evidence.
 
-`num_ctx: 8192` on both — identical for a fair comparison, and it fits: qwen3:8b leaves
-~2.2 GB headroom for KV cache, gemma4 e4b-qat leaves ~1.1 GB, against ~7.2 GB usable after
-the Windows desktop reserve.
+`num_ctx: 8192` on both — identical for a fair comparison, and derived rather than guessed.
+Qwen3-8B is 36 layers × 8 KV heads × 128 head dim, so KV cache costs roughly 0.147 MB per
+token: 1.2 GB at 8192, 2.4 GB at 16384. Against ~2.2 GB of headroom over the 5 GB of
+weights, 8192 fits and 16384 does not. Gemma 4 E4B is smaller and comfortably under that.
 
-### 2. Launch-time selection
+### 2. Context budget and prompt assembly
+
+This section stands on its own as a correctness fix. It applies to the current qwen3 setup
+and should ideally land before the registry work, so the qwen3 baseline being compared
+against is not a truncated one.
+
+#### Budget
+
+`num_ctx` covers prompt **plus** generation. With `num_predict: 2048` reserved for the
+answer, the usable prompt budget at `num_ctx: 8192` is ~6144 tokens.
+
+| Component | Tokens | Bounded? |
+|---|---|---|
+| System prompt + user context | ~1100 | yes — `_CONTEXT_MAX_WORDS = 500` caps the context half |
+| Passages | ~2000 | yes — `TOP_K 5` × `MAX_CHUNK_WORDS 300` |
+| Closing instruction block + current message | ~350 | roughly |
+| **Fixed subtotal** | **~3450** | |
+| History | ~2700 remaining | **no** — capped by turn count, not size |
+
+History is the only unbounded component. Typical assistant answers run 300–600 tokens so
+the budget usually holds, which is why the defect has not been obvious.
+
+#### Priority-ordered assembly
+
+Build the prompt in priority order rather than trusting the ceiling:
+
+1. Place system prompt, passages, and the current query first. These are never candidates
+   for eviction.
+2. Add history turns newest-first, accumulating estimated tokens, until the remaining
+   budget is spent. Drop the rest.
+3. `MAX_HISTORY` becomes an upper cap rather than the trimming mechanism.
+
+The system prompt then cannot be truncated by construction, at any conversation length and
+any answer verbosity.
+
+Token estimation uses `len(text) // 4` — close enough for English, conservative for
+Devanagari, which tokenizes worse. Erring pessimistic is the correct direction.
+
+#### Instrumentation
+
+Ollama returns `prompt_eval_count` — the true token count of the prompt it evaluated — in
+the final `done` chunk. `stream_ollama()` currently discards it by breaking on `done` at
+line 573. Instead:
+
+- Read `prompt_eval_count` and carry it out of the streamer.
+- Add it to the `queries.jsonl` record.
+- Print a terminal warning when it exceeds 90% of `num_ctx`.
+
+A value pinned at or near `num_ctx` is direct evidence of truncation, converting this from
+estimate to ground truth per query.
+
+### 3. Launch-time selection
 
 New `select_model()`, called at the top of `main()` **before** the index and reranker load,
 so the decision is made before the ~20-second startup wait.
@@ -113,7 +170,7 @@ Behavior:
 Selecting a model that is not pulled is allowed — Ollama will pull it on first request, and
 blocking on it would be more annoying than the wait.
 
-### 3. Call sites
+### 4. Call sites
 
 All four existing Ollama calls read from `ACTIVE`:
 
@@ -127,7 +184,7 @@ All four existing Ollama calls read from `ACTIVE`:
 Helpers use the same model as chat. Only one model is ever resident, so there is no
 eviction and no reload cost.
 
-### 4. Thinking mode
+### 5. Thinking mode
 
 Two mechanisms, dispatched on `ACTIVE["thinking_mode"]`, entirely inside `stream_ollama()`.
 Keeping the branch there means `chat()` is unchanged and the Claude path
@@ -165,7 +222,7 @@ tuple so they can be corrected in one place once observed.
 Until the tag format is confirmed against a real response, treat Gemma thinking mode as
 unverified. Standard (non-thinking) mode has no such dependency and works regardless.
 
-### 5. UI
+### 6. UI
 
 No dropdown — selection already happened at launch.
 
@@ -176,7 +233,7 @@ No dropdown — selection already happened at launch.
   when the Claude API backend is selected. The existing `backend_radio.change` handler at
   line 906 keeps its Claude behavior and gains the `thinking_mode is None` condition.
 
-### 6. Logging
+### 7. Logging
 
 Add `"model": ACTIVE["tag"]` to:
 
@@ -186,7 +243,10 @@ Add `"model": ACTIVE["tag"]` to:
 Without this the accumulated thumbs data cannot be split by model and the comparison the
 whole feature exists to enable is not possible.
 
-### 7. Stale references
+Also add `"prompt_tokens": <prompt_eval_count>` to the grounded-path query record, per
+section 2.
+
+### 8. Stale references
 
 Four hard-coded `qwen3:8b` strings become the active tag or a neutral phrasing:
 
@@ -206,13 +266,16 @@ Four hard-coded `qwen3:8b` strings become the active tag or a neutral phrasing:
 | `think` sent to non-thinking model | Prevented by construction — `"prompt_token"` and `None` never send the key |
 | Unrecognized reasoning tags | Stream normally; never swallow the response |
 | Ollama not running | Existing `ConnectionError` handler, message now names the active tag |
+| History alone exceeds its budget | Newest turn is kept even if oversized; older turns dropped. System prompt and passages are never touched |
+| `prompt_eval_count` absent from response | Log `null`, skip the warning — never fail the turn |
 
 ## Verification
 
 1. `python 3_chatbot.py`, press Enter — qwen3 selected, generation parameters identical to
    pre-change. Confirm by diffing a `queries.jsonl` row against a pre-change row.
-2. Confirm `num_ctx` is actually applied: run a long multi-turn conversation and check the
-   persona holds where it previously would have been truncated.
+2. Run a conversation long enough to exceed the history budget. Confirm from
+   `prompt_eval_count` in the log that the prompt stays under `num_ctx`, that older turns
+   were dropped rather than the front of the prompt, and that the persona holds.
 3. Select gemma4, thinking off, ask a grounded question. Confirm answer streams, sources
    render, `model` appears in the log line.
 4. Select gemma4, thinking on. Inspect raw `message.content` in the terminal for the tag
@@ -225,5 +288,9 @@ Four hard-coded `qwen3:8b` strings become the active tag or a neutral phrasing:
 ## Open items
 
 - Gemma 4 reasoning tag strings — resolved by verification step 4.
-- Whether 8192 `num_ctx` is enough, or whether the prompt still overflows. Measurable once
-  logging is in place.
+- Whether the section 2 work ships as a separate commit ahead of the registry, or together
+  with it. Leaning separate: it is a correctness fix to the existing qwen3 path and does not
+  depend on anything else in this spec.
+- How much history the ~2700-token budget actually buys in practice. Answerable from
+  `prompt_tokens` once a week of logs exists; if it proves too tight, the lever is
+  `num_predict` rather than `num_ctx`, since KV cache is the VRAM constraint.
